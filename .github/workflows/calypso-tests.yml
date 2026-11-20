@@ -1,0 +1,31 @@
+name: Calypso AMI tests
+on:
+  push:
+    branches: [calypso-devel]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  transport:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        php: ['7.4', '8.4', '8.5']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          extensions: pcntl, mbstring
+          tools: composer:v2
+          coverage: none
+      - name: Install isolated runtime dependencies
+        run: |
+          php -r '$p=json_decode(file_get_contents("composer.json"),true); unset($p["require-dev"]); $p["require"]["psr/log"]="1.1.4"; file_put_contents("composer.json",json_encode($p,JSON_PRETTY_PRINT));'
+          composer update --no-dev --no-interaction --prefer-dist
+      - name: Lint source
+        run: find src tests/Calypso -name '*.php' -print0 | xargs -0 -n 1 php -l
+      - name: AMI transport tests
+        run: php -d error_reporting=32767 tests/Calypso/transport.php
