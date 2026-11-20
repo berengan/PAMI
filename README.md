@@ -1,109 +1,170 @@
-[![Gitter](https://badges.gitter.im/chan-sccp/PAMI.svg)](https://gitter.im/chan-sccp/PAMI?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
-<!--
-[![License](https://poser.pugx.org/marcelog/PAMI/license)](https://packagist.org/packages/marcelog/PAMI)
-[![Latest Stable Version](https://poser.pugx.org/marcelog/PAMI/v/stable)](https://packagist.org/packages/marcelog/PAMI)
-[![Documentation Status](https://readthedocs.org/projects/pami/badge/?version=latest)](http://pami.readthedocs.org/en/latest/?badge=latest)
--->
-[![Build Status](http://img.shields.io/travis/chan-sccp/PAMI.svg?style=flat)](https://app.travis-ci.com/github/chan-sccp/PAMI)
-[![Coverage Status](https://coveralls.io/repos/github/chan-sccp/PAMI/badge.svg?branch=master)](https://coveralls.io/github/chan-sccp/PAMI?branch=master)
-[![Code Climate](https://codeclimate.com/github/chan-sccp/PAMI/badges/gpa.svg)](https://codeclimate.com/github/chan-sccp/PAMI)
-<!--
-[![Issue Count](https://codeclimate.com/github/chan-sccp/PAMI/badges/issue_count.svg)](https://codeclimate.com/github/chan-sccp/PAMI)
-[![Click here to lend your support to: PAMI and make a donation at pledgie.com !](https://pledgie.com/campaigns/30944.png?skin_name=chrome' border='0')](https://pledgie.com/campaigns/30944)
--->
+# PAMI — Calypso fork
 
-# Fork !
-Note that this is a fork of the official release by [Marcelo Gornstein](https://github.com/marcelog/PAMI), which has not been maintained for a while (hence the fork).
+[![Calypso AMI tests](https://github.com/berengan/PAMI/actions/workflows/calypso-tests.yml/badge.svg?branch=calypso-devel)](https://github.com/berengan/PAMI/actions/workflows/calypso-tests.yml)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
-# Introduction
+PHP Asterisk Manager Interface (PAMI) is an object-oriented AMI client providing
+synchronous actions and event listeners for Asterisk applications.
 
-PAMI means PHP Asterisk Manager Interface. As its name suggests its just a
-set of php classes that will let you issue commands to an ami and/or receive
-events, using an observer-listener pattern.
+This fork is maintained for Calypso, with particular attention to long-running
+PHP daemons, predictable socket I/O timeouts and modern PHP compatibility.
+It is based on [chan-sccp/PAMI](https://github.com/chan-sccp/PAMI) v2.0.10,
+itself derived from [Marcelo Gornstein's original PAMI](https://github.com/marcelog/PAMI).
 
-The idea behind this, is to easily implement operator consoles, monitors, etc.
-either via SOA or ajax.
+## Development status
 
- * A port for nodejs is available at: http://marcelog.github.com/Nami
- * A port for erlang is available at: https://github.com/marcelog/erlami
+The `calypso-devel` branch is under active development. The planned release is
+v2.1.0; it has not yet been published. Do not deploy this branch to production
+without validating the application and its Asterisk version.
 
-# Resources
+## Changes from upstream v2.0.10
 
- * [API](doc/api.md) in Markdown
- * [API](https://chan-sccp.github.io/PAMI) in html
- * Collection of [Examples](doc/examples/)
- * [Complete PAGI/PAMI talk for the PHP Conference Argentina 2013](http://www.slideshare.net/mgornstein/phpconf-2013). Check the slide notes for the complete text :)
+- Connection and read/write timeouts expressed in milliseconds.
+- Non-blocking socket I/O and monotonic deadlines using `hrtime()`.
+- Synchronous `send()`, including partial TCP writes and response correlation.
+- Non-blocking `process()` for polling incoming AMI messages.
+- Explicit login response validation and socket resource cleanup.
+- Connection invalidation after failed in-flight requests to prevent ambiguous
+  late responses from being associated with subsequent commands.
+- Modern header-framed command success/error responses and repeated Output fields.
+- Corrections for PHP deprecations, including dynamic properties, non-canonical
+  casts and nullable string arguments.
+- Automated transport regression tests and memory-growth checks.
 
-# PHP Versions
+## Compatibility
 
-Note: PAMI Requires PHP 5.6+.
+The development target is PHP 7.4 or newer, with CI covering PHP 7.4, 8.4 and
+8.5 using PSR-3 log version 1.1.4. The initial transport suite passed on all
+three versions; the expanded strict-diagnostics and stress suite also passed on all three versions (10,000 commands per version, zero measured PHP memory growth). Other PHP and PSR-3 versions are not certified.
 
-# Installing
-Add this library to your [Composer](https://packagist.org/) configuration. In
-composer.json:
+The Composer package name remains `chan-sccp/pami` and the namespace remains
+`PAMI`. No new runtime package dependencies are introduced. Composer requires PHP 7.4 or newer.
+
+## Installation — development only
+
+Add the fork as a VCS repository in your application's composer.json:
+
 ```json
+{
+  "repositories": [
+    {
+      "type": "vcs",
+      "url": "https://github.com/berengan/PAMI.git"
+    }
+  ],
   "require": {
-    "chan-sccp/pami": "2.*"
+    "chan-sccp/pami": "dev-calypso-devel"
   }
+}
 ```
 
-# QuickStart
+Then update only the target package and review the lockfile:
 
-For an in-depth tutorial: http://marcelog.github.com/articles/pami_introduction_tutorial_how_to_install.html
+```sh
+composer update chan-sccp/pami
+```
+
+Keep existing application dependencies and commit the reviewed lockfile.
+Use an explicit stable version once a validated release is available.
+
+## Migration from v2.0.10
+
+**Breaking configuration change:** both timeout options now use positive
+integer milliseconds rather than seconds. Both default to 1000 ms.
+
+| Option | Old value (seconds) | Equivalent new value (milliseconds) |
+| --- | ---: | ---: |
+| connect_timeout | 3 | 3000 |
+| read_timeout | 2 | 2000 |
+
+Do not multiply values that were already intended to represent milliseconds.
+
+The connection timeout applies to socket connection establishment. The greeting
+and login each have a separate read timeout budget. The send deadline covers
+writing the request and waiting for its complete response. Application event
+callbacks and other synchronous PHP work can extend actual elapsed time.
+
+A failed in-flight send closes the connection and rethrows the exception.
+The caller must explicitly reconnect before sending another action.
+There is no automatic reconnection or command retry: a timed-out action may
+already have been executed by Asterisk. A valid AMI Error response is returned
+as a response object rather than treated as a transport timeout.
+
+Nested calls to send() during a pending action are not supported. Event
+listeners should enqueue work for later execution instead. Polling loops
+should include suitable pacing to avoid busy-spinning on an idle socket.
+
+## Quick start
 
 ```php
-// Make sure you include the composer autoload.
 require __DIR__ . '/vendor/autoload.php';
 
-$options = array(
-    'host' => '2.3.4.5',
-    'scheme' => 'tcp://',
-    'port' => 9999,
-    'username' => 'asd',
-    'secret' => 'asd',
-    'connect_timeout' => 10,
-    'read_timeout' => 10
-);
-$client = new \PAMI\Client\Impl\ClientImpl($options);
+use PAMI\Client\Impl\ClientImpl;
+use PAMI\Client\Exception\ClientException;
+use PAMI\Message\Action\CommandAction;
 
-// Registering a closure
+$client = new ClientImpl([
+    'host' => '127.0.0.1',
+    'scheme' => 'tcp://',
+    'port' => 5038,
+    'username' => 'ami-user',
+    'secret' => getenv('AMI_SECRET'),
+    'connect_timeout' => 3000,
+    'read_timeout' => 2000,
+]);
+
 $client->registerEventListener(function ($event) {
+    // Keep callbacks short; queue lengthy work for the main loop.
 });
 
-// Register a specific method of an object for event listening
-$client->registerEventListener(array($listener, 'handle'));
-
-// Register an IEventListener:
-$client->registerEventListener($listener);
+try {
+    $client->open();
+    $response = $client->send(new CommandAction('core show version'));
+    if ($response->isSuccess()) {
+        echo $response->getCommandOutput();
+    } else {
+        error_log((string) $response->getMessage());
+    }
+    $client->process();
+} catch (ClientException $e) {
+    error_log($e->getMessage());
+    // A daemon should schedule an explicit reconnect, not retry the action blindly.
+} finally {
+    $client->close();
+}
 ```
 
-# Using Predicates
-A second (optional) argument can be used when registering the event listener: a
-closure that will be evaluated before calling the callback. The callback will
-be called only if this predicate returns true:
+## Automated tests
 
-```php
-use PAMI\Message\Event\DialEvent;
+See [GitHub Actions](https://github.com/berengan/PAMI/actions/workflows/calypso-tests.yml)
+for current results. The workflow installs isolated runtime dependencies and
+lints the PHP source. The Linux transport tests require the pcntl extension.
 
-$client->registerEventListener(
-    array($listener, 'handleDialStart'),
-    function ($event) {
-        return $event instanceof DialEvent && $event->getSubEvent() == 'Begin';
-    })
-);
+With Composer runtime dependencies installed:
+
+```sh
+php -d error_reporting=32767 tests/Calypso/transport.php
 ```
 
-# Example
+The simulated AMI suite covers rejected login, immediate and fragmented
+responses, command output, command errors, interleaved events, idle polling,
+timeouts, late responses and disconnects. The stress scenario sends 10,000
+commands on one connection and checks memory growth after warm-up against a
+1 MiB threshold. Unsuppressed PHP diagnostics fail the suite. A Linux-only connection cycle test checks 100 open/send/close cycles, peer EOF and file descriptor growth.
 
-Please see docs/examples/quickstart/example.php for a very basic example.
+Simulation is not a substitute for real Asterisk integration testing.
+Legacy command framing, TLS and the full upstream action/event catalog still
+require broader validation.
 
-AsterTrace is a full application: https://github.com/marcelog/AsterTrace.
+## Resources
 
-Also, you might want to look at this article: http://marcelog.github.com/articles/php_asterisk_listener_example_using_pami_and_ding.html
+- [Upstream API documentation](doc/api.md)
+- [Upstream examples](doc/examples/)
+- [Upstream HTML API](https://chan-sccp.github.io/PAMI)
+- [Calypso fork issues](https://github.com/berengan/PAMI/issues)
 
-For an example of using asynchronous AGI with PAMI, see docs/examples/asyncagi
-
-The [march edition](http://sdjournal.org/a-practical-introduction-to-functional-programming-with-php-sdj-issue-released/) of [Software Developer Journal](http://sdjournal.org/) features a complete article about writing telephony applications with PAMI and PAGI.
+The following action and event catalogs are inherited from upstream; inclusion
+does not imply individual regression testing in the Calypso fork.
 
 # Currently Supported Events
 
@@ -548,7 +609,7 @@ $pami->setLogger($logger);
 By default, the client will use the [NullLogger](http://www.php-fig.org/psr/psr-3/#1-4-helper-classes-and-interfaces).
 
 # Developers
-This project uses [phing](https://www.phing.info/). Current tasks include:
+The upstream development tooling uses [phing](https://www.phing.info/). Current tasks include:
  * test: Runs [PHPUnit](https://phpunit.de/).
  * cs: Runs [CodeSniffer](https://github.com/squizlabs/PHP_CodeSniffer).
  * doc: Runs [PhpDocumentor](http://www.phpdoc.org/).
@@ -590,7 +651,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 
-# Maintainer of This Fork:
+# Maintainer of the upstream chan-sccp fork:
 
 * Diederik de Groot <ddegroot@talon.nl>
 

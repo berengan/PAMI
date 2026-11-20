@@ -2,8 +2,19 @@
     "name": "chan-sccp/pami",
     "type": "library",
     "description": "Asterisk Manager Interface (AMI) client for PHP, event driven, object oriented (Fork)",
-    "keywords": ["asterisk","ami","client","telephony","voip","event","action","manager","monitor", "chan-sccp"],
-    "homepage": "http://github.com/chan-sccp/PAMI",
+    "keywords": [
+        "asterisk",
+        "ami",
+        "client",
+        "telephony",
+        "voip",
+        "event",
+        "action",
+        "manager",
+        "monitor",
+        "chan-sccp"
+    ],
+    "homepage": "https://github.com/berengan/PAMI",
     "license": "Apache-2.0",
     "authors": [
         {
@@ -20,9 +31,9 @@
         }
     ],
     "support": {
-        "issues": "https://github.com/chan-sccp/PAMI/issues",
+        "issues": "https://github.com/berengan/PAMI/issues",
         "wiki": "https://github.com/chan-sccp/PAMI/wiki",
-        "source": "https://github.com/chan-sccp/PAMI",
+        "source": "https://github.com/berengan/PAMI",
         "docs": "https://chan-sccp.github.io/PAMI"
     },
     "autoload": {
@@ -31,7 +42,7 @@
         }
     },
     "require": {
-        "php": ">=5.6.0",
+        "php": ">=7.4",
         "psr/log": ">= 1.0.0"
     },
     "require-dev": {
@@ -43,7 +54,7 @@
         "phpmd/phpmd": ">=2.5.0",
         "squizlabs/php_codesniffer": ">=3.4.0",
         "phploc/phploc": "*",
-        "evert/phpdoc-md" : "~0.2.0",
+        "evert/phpdoc-md": "~0.2.0",
         "theseer/phpdox": ">=0.7.0"
     },
     "replace": {

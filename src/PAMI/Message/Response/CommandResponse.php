@@ -55,7 +55,7 @@ class CommandResponse extends Response
      */
     public function isCommandFinished()
     {
-        return stristr($this->getMessage(), 'command output follows') !== false;
+        return stristr((string) $this->getMessage(), 'command output follows') !== false;
     }
 
     /**
@@ -65,7 +65,7 @@ class CommandResponse extends Response
      */
     public function getCommandOutput()
     {
-        return (string) implode(self::EOL, $this->getKey('Output'));
+        return (string) implode(self::EOL, $this->output);
     }
 
     /**
@@ -75,7 +75,7 @@ class CommandResponse extends Response
      */
     public function getCommandOutputArray()
     {
-        return $this->getKey('Output');
+        return $this->output;
     }
 
     /**
@@ -106,6 +106,7 @@ class CommandResponse extends Response
     public function __construct($rawContent)
     {
         parent::__construct($rawContent);
-        $this->completed = $this->isCommandFinished();
+        // Modern AMI returns a complete header-framed Command response, including errors.
+        $this->completed = !$this->isSuccess() || $this->isCommandFinished() || strcasecmp((string) $this->getKey('Response'), 'Success') === 0;
     }
 }

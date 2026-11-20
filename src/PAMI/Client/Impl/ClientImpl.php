@@ -88,7 +88,7 @@ class ClientImpl implements IClient
     private $pass;
 
     /**
-     * Connection timeout, in seconds.
+     * Connection timeout, in milliseconds.
      * @var integer
      */
     private $cTimeout;
@@ -112,7 +112,7 @@ class ClientImpl implements IClient
     private $responseFactory;
 
     /**
-     * R/W timeout, in seconds.
+     * R/W timeout, in milliseconds.
      * @var integer
      */
     private $rTimeout;
@@ -192,22 +192,16 @@ class ClientImpl implements IClient
             $socketUri,
             $errno,
             $errstr,
-            $this->cTimeout,
+            $this->cTimeout / 1000,
             STREAM_CLIENT_CONNECT,
             $this->context
         );
         if ($this->socket === false) {
             throw new ClientException(sprintf('error: "%s" while create socket "%s"', $errstr, $socketUri));
         }
-        // set socket in block mode
-        if (!stream_set_blocking($this->socket, true)) {
-            throw new ClientException(sprintf('error set block mode on "%s" socket', $socketUri));
-        }
-        // set read timeout on socket
-        if (!stream_set_timeout($this->socket, $this->rTimeout)) {
-            throw new ClientException(
-                sprintf('socket "%s" timeout "%s" set error', $socketUri, $this->rTimeout)
-            );
+        if (!stream_set_blocking($this->socket, false)) {
+            $this->close();
+            throw new ClientException('Could not set non-blocking AMI socket');
         }
     }
 
@@ -219,29 +213,60 @@ class ClientImpl implements IClient
      */
     public function open()
     {
-        $this->connect();
-        $socketUri = $this->getSocketUri();
-        $asteriskId = stream_get_line($this->socket, 1024, Message::EOL);
-
-        if ($asteriskId === false) {
-            throw new ClientException(sprintf('error: "%s" while read socket', socket_strerror(socket_last_error())));
-        }
-
-        if (strstr($asteriskId, 'Asterisk') === false) {
-            throw new ClientException(sprintf('Unknown peer: "%s"', $asteriskId));
-        }
-        $this->logger->debug(sprintf('recv <-- asteriskId: "%s"', $asteriskId));
-
-        $msg = new LoginAction($this->user, $this->pass);
-        $this->send($msg, function (Response $response) use ($socketUri) {
-            if (!$response->isSuccess()) {
-                throw new ClientException(
-                    sprintf('Could not connect to: "%s", response: "%s"', $socketUri, $response->getMessage())
-                );
+        $this->close();
+        try {
+            $this->connect();
+            $deadline = $this->deadline($this->rTimeout);
+            $banner = '';
+            while (strpos($banner, Message::EOL) === false) {
+                $this->waitForSocket(false, $deadline);
+                $chunk = @fread($this->socket, 8192);
+                if ($chunk === false || ($chunk === '' && feof($this->socket))) {
+                    throw new ClientException('Error reading AMI greeting');
+                }
+                $banner .= $chunk;
+                if (strlen($banner) > 65536) {
+                    throw new ClientException('AMI greeting too large');
+                }
             }
-        });
-        $this->currentProcessingMessage = '';
-        $this->logger->info(sprintf('Login to: "%s" by user: "%s"', $socketUri, $this->user));
+            list($asteriskId, $this->currentProcessingMessage) = explode(Message::EOL, $banner, 2);
+            if (strpos($asteriskId, 'Asterisk') === false) {
+                throw new ClientException('Unknown AMI peer');
+            }
+            $msg = new LoginAction($this->user, $this->pass);
+            $response = $this->send($msg);
+            if (!$response->isSuccess()) {
+                throw new ClientException('AMI login failed: ' . $response->getMessage());
+            }
+            $this->logger->info(sprintf('Login to: "%s" by user: "%s"', $this->getSocketUri(), $this->user));
+        } catch (\Throwable $e) {
+            $this->close();
+            throw $e;
+        }
+    }
+
+    private function deadline($milliseconds)
+    {
+        return hrtime(true) + $milliseconds * 1000000;
+    }
+
+    private function waitForSocket($writing, $deadline)
+    {
+        $remaining = $deadline - hrtime(true);
+        if ($remaining <= 0) {
+            throw new ClientException('AMI timeout');
+        }
+        $microseconds = (int) ceil($remaining / 1000);
+        $read = $writing ? array() : array($this->socket);
+        $write = $writing ? array($this->socket) : array();
+        $except = null;
+        $ready = @stream_select($read, $write, $except, intdiv($microseconds, 1000000), $microseconds % 1000000);
+        if ($ready === false) {
+            throw new ClientException('AMI socket select failed');
+        }
+        if ($ready === 0) {
+            throw new ClientException('AMI timeout');
+        }
     }
 
     /**
@@ -287,6 +312,9 @@ class ClientImpl implements IClient
         $msgs = array();
         // Read something.
         //$read = @fread($this->socket, 65535);
+        if (!is_resource($this->socket)) {
+            throw new ClientException('AMI socket is not connected');
+        }
         $read = @fread($this->socket, 8192);
         if ($read === false || (empty($read) && @feof($this->socket))) {
             throw new ClientException('Error reading');
@@ -294,13 +322,15 @@ class ClientImpl implements IClient
         $this->currentProcessingMessage .= $read;
         // If we have a complete message, then return it. Save the rest for
         // later.
-        while (($marker = strpos($this->currentProcessingMessage, Message::EOM))) {
+        while (($marker = strpos($this->currentProcessingMessage, Message::EOM)) !== false) {
             $msg = substr($this->currentProcessingMessage, 0, $marker);
             $this->currentProcessingMessage = substr(
                 $this->currentProcessingMessage,
                 $marker + strlen(Message::EOM)
             );
-            $msgs[] = $msg;
+            if ($msg !== '') {
+                $msgs[] = $msg;
+            }
         }
         return $msgs;
     }
@@ -324,7 +354,9 @@ class ClientImpl implements IClient
               (($resPos < $evePos) || $evePos === false)
             ) {
                 $response = $this->messageToResponse($aMsg);
-                $this->incomingQueue[$response->getActionId()] = $response;
+                if ($this->lastActionId !== false && $response->getActionId() === $this->lastActionId) {
+                    $this->incomingQueue[$response->getActionId()] = $response;
+                }
             } elseif ($evePos !== false) {
                 $event = $this->messageToEvent($aMsg);
                 $response = $this->findResponse($event);
@@ -363,7 +395,7 @@ class ClientImpl implements IClient
     protected function findResponse(IncomingMessage $message)
     {
         $actionId = $message->getActionId();
-        if (isset($this->incomingQueue[$actionId])) {
+        if ($actionId !== null && isset($this->incomingQueue[$actionId])) {
             return $this->incomingQueue[$actionId];
         }
         return false;
@@ -488,39 +520,55 @@ class ClientImpl implements IClient
      */
     public function send(OutgoingMessage $message)
     {
-        $actionId = $message->getActionId();
-        if (null === $actionId) {
-            $actionId = bin2hex(random_bytes(8));
-            $message->setActionId($actionId);
-            $this->logger->debug(
-                sprintf('set actionId: "%s" on message of class "%s"', $actionId, get_class($message))
-            );
+        if (!is_resource($this->socket)) {
+            throw new ClientException('AMI socket is not connected');
         }
-        $messageToSend = $message->serialize();
-        $length = strlen($messageToSend);
-        $this->logger->debug(
-            '------ Sending: ------ ' . "\n" . $messageToSend . '----------'
-        );
+        if ($this->lastActionId !== false) {
+            throw new ClientException('Nested AMI send is not supported');
+        }
+        if ($message->getActionId() === null) {
+            $message->setActionId(bin2hex(random_bytes(8)));
+        }
+        $data = $message->serialize();
+        $length = strlen($data);
+        $offset = 0;
         $this->lastActionId = $message->getActionId();
         $this->lastActionClass = $message;
-        if (@fwrite($this->socket, $messageToSend) < $length) {
-            throw new ClientException('Could not send message');
-        }
-        $waituntil = time() + $this->rTimeout;
-        while (time() <= $waituntil) {
-            stream_set_timeout($this->socket, $this->rTimeout);
-            $this->process();
-            $info = stream_get_meta_data($this->socket);
-            if ($info['timed_out']) {
-                break;
+        $deadline = $this->deadline($this->rTimeout);
+        try {
+            while ($offset < $length) {
+                $this->waitForSocket(true, $deadline);
+                $written = @fwrite($this->socket, substr($data, $offset));
+                if ($written === false || ($written === 0 && feof($this->socket))) {
+                    throw new ClientException('Could not send AMI message');
+                }
+                $offset += $written;
             }
-            $response = $this->getRelated($message);
-            if ($response != false) {
-                $this->_lastActionId = false;
-                return $response;
+            while (hrtime(true) < $deadline) {
+                // Read first, including any bytes already buffered by PHP.
+                $this->process();
+                if (hrtime(true) >= $deadline) {
+                    break;
+                }
+                $response = $this->getRelated($message);
+                if ($response !== false) {
+                    return $response;
+                }
+                $meta = stream_get_meta_data($this->socket);
+                if (empty($meta['unread_bytes'])) {
+                    $this->waitForSocket(false, $deadline);
+                }
             }
+            throw new ClientException('AMI read timeout');
+        } catch (\Throwable $e) {
+            // A late response without ActionID cannot be safely correlated.
+            $this->close();
+            throw $e;
+        } finally {
+            $this->lastActionId = false;
+            $this->lastActionClass = null;
+            $this->incomingQueue = array();
         }
-        throw new ClientException('Read timeout');
     }
 
     /**
@@ -531,7 +579,14 @@ class ClientImpl implements IClient
     public function close()
     {
         $this->logger->debug('Closing connection to asterisk.');
-        @stream_socket_shutdown($this->socket, STREAM_SHUT_RDWR);
+        if (is_resource($this->socket)) {
+            @fclose($this->socket);
+        }
+        $this->socket = null;
+        $this->currentProcessingMessage = '';
+        $this->incomingQueue = array();
+        $this->lastActionId = false;
+        $this->lastActionClass = null;
     }
 
     /**
@@ -579,8 +634,12 @@ class ClientImpl implements IClient
         $this->port = (int) $options['port'];
         $this->user = $options['username'];
         $this->pass = $options['secret'];
-        $this->cTimeout = $options['connect_timeout'];
-        $this->rTimeout = isset($options['read_timeout']) ? $options['read_timeout'] : 1;
+        $this->cTimeout = filter_var($options['connect_timeout'] ?? 1000, FILTER_VALIDATE_INT, array('options' => array('min_range' => 1)));
+        $this->rTimeout = filter_var($options['read_timeout'] ?? 1000, FILTER_VALIDATE_INT, array('options' => array('min_range' => 1)));
+        if ($this->cTimeout === false || $this->rTimeout === false) {
+            throw new ClientException('AMI timeouts must be positive integer milliseconds');
+        }
+        $this->currentProcessingMessage = '';
         $this->scheme = isset($options['scheme']) ? $options['scheme'] : 'tcp://';
         $this->eventMask = isset($options['event_mask']) ? $options['event_mask'] : null;
         $this->eventListeners = array();
