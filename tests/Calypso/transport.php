@@ -1,0 +1,96 @@
+<?php
+require dirname(__DIR__, 2) . '/vendor/autoload.php';
+
+use PAMI\Client\Impl\ClientImpl;
+use PAMI\Client\Exception\ClientException;
+use PAMI\Message\Action\PingAction;
+
+function check($condition, $message) {
+    if (!$condition) {
+        throw new RuntimeException($message);
+    }
+}
+function request($socket) {
+    $data = '';
+    while (($line = fgets($socket)) !== false) {
+        $data .= $line;
+        if ($line === "\r\n") break;
+    }
+    check(preg_match('/^ActionID:\s*([^\r\n]+)/mi', $data, $matches), 'Missing ActionID');
+    return trim($matches[1]);
+}
+function reply($socket, $id, $status = 'Success') {
+    fwrite($socket, "Response: $status\r\nActionID: $id\r\nMessage: Test\r\n\r\n");
+}
+function scenario($mode) {
+    $server = stream_socket_server('tcp://127.0.0.1:0');
+    check($server !== false, 'Cannot listen');
+    $port = (int) substr(strrchr(stream_socket_get_name($server, false), ':'), 1);
+    $pid = pcntl_fork();
+    check($pid >= 0, 'Cannot fork');
+    if ($pid === 0) {
+        try {
+            $socket = stream_socket_accept($server, 5);
+            check($socket !== false, 'Accept failed');
+            stream_set_timeout($socket, 5);
+            fwrite($socket, "Asterisk Call Manager/5.0\r\n");
+            $id = request($socket);
+            reply($socket, $id, $mode === 'login-error' ? 'Error' : 'Success');
+            if ($mode !== 'login-error') {
+                $id = request($socket);
+                if ($mode === 'timeout') {
+                    usleep(700000);
+                    @fwrite($socket, "Response: Success\r\nMessage: Late\r\n\r\n");
+                } elseif ($mode === 'disconnect') {
+                    // Close without responding.
+                } elseif ($mode === 'fragment') {
+                    fwrite($socket, "Response: Success\r\nAction");
+                    usleep(50000);
+                    fwrite($socket, "ID: $id\r\nMessage: Test\r\n\r\n");
+                } else {
+                    reply($socket, $id);
+                }
+            }
+            fclose($socket);
+            fclose($server);
+            exit(0);
+        } catch (Throwable $e) {
+            fwrite(STDERR, $e->getMessage() . PHP_EOL);
+            exit(1);
+        }
+    }
+    fclose($server);
+    $client = new ClientImpl(['host'=>'127.0.0.1','port'=>$port,'username'=>'test','secret'=>'test','connect_timeout'=>1000,'read_timeout'=>300]);
+    try {
+        $failed = false;
+        try {
+            $client->open();
+            if ($mode === 'login-error') throw new RuntimeException('Rejected login accepted');
+            $start = hrtime(true);
+            $client->process();
+            check((hrtime(true)-$start)/1e6 < 100, 'Idle process blocked');
+            $start = hrtime(true);
+            try {
+                $response = $client->send(new PingAction());
+                check($response->isSuccess(), 'Response failed');
+            } finally {
+                $elapsed = (hrtime(true)-$start)/1e6;
+            }
+        } catch (ClientException $e) {
+            $failed = true;
+        }
+        check($failed === in_array($mode, ['login-error','timeout','disconnect'], true), 'Unexpected outcome: '.$mode);
+        if ($mode === 'timeout') {
+            check(isset($elapsed) && $elapsed >= 250 && $elapsed < 650, 'Incorrect timeout');
+            check(!is_resource($client->getSocket()), 'Timed-out connection retained');
+        }
+    } finally {
+        $client->close();
+        pcntl_waitpid($pid, $status);
+    }
+    check(pcntl_wifexited($status) && pcntl_wexitstatus($status) === 0, 'Fake server failed');
+    echo "PASS $mode\n";
+}
+foreach (['login-error','success','fragment','timeout','disconnect'] as $mode) {
+    scenario($mode);
+}
