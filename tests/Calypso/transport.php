@@ -133,3 +133,49 @@ function scenario($mode) {
 foreach (['login-error','success','fragment','command','command-error','timeout','disconnect','stress'] as $mode) {
     scenario($mode);
 }
+
+function connectionCycles() {
+    $server = stream_socket_server('tcp://127.0.0.1:0');
+    check($server !== false, 'Cannot listen');
+    $port = (int) substr(strrchr(stream_socket_get_name($server, false), ':'), 1);
+    $pid = pcntl_fork();
+    check($pid >= 0, 'Cannot fork');
+    if ($pid === 0) {
+        try {
+            for ($i = 0; $i < 100; $i++) {
+                $socket = stream_socket_accept($server, 5);
+                check($socket !== false, 'Cycle accept failed');
+                stream_set_timeout($socket, 5);
+                fwrite($socket, "Asterisk Call Manager/5.0\r\n");
+                reply($socket, request($socket));
+                reply($socket, request($socket));
+                check(fread($socket, 1) === '' && feof($socket), 'Client did not close connection');
+                fclose($socket);
+            }
+            fclose($server);
+            exit(0);
+        } catch (Throwable $e) {
+            fwrite(STDERR, $e->getMessage() . PHP_EOL);
+            exit(1);
+        }
+    }
+    fclose($server);
+    $client = new ClientImpl(['host'=>'127.0.0.1','port'=>$port,'username'=>'test','secret'=>'test','connect_timeout'=>1000,'read_timeout'=>1000]);
+    $before = count(scandir('/proc/self/fd'));
+    try {
+        for ($i = 0; $i < 100; $i++) {
+            $client->open();
+            check($client->send(new PingAction())->isSuccess(), 'Cycle ping failed');
+            $client->close();
+            check(!is_resource($client->getSocket()), 'Socket retained after close');
+        }
+        $after = count(scandir('/proc/self/fd'));
+        check($after <= $before, 'File descriptor leak');
+    } finally {
+        $client->close();
+        pcntl_waitpid($pid, $status);
+    }
+    check(pcntl_wifexited($status) && pcntl_wexitstatus($status) === 0, 'Cycle server failed');
+    echo "PASS connection cycles: 100, descriptor growth " . ($after - $before) . "\n";
+}
+connectionCycles();
