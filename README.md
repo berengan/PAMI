@@ -35,12 +35,10 @@ without validating the application and its Asterisk version.
 
 The development target is PHP 7.4 or newer, with CI covering PHP 7.4, 8.4 and
 8.5 using PSR-3 log version 1.1.4. The initial transport suite passed on all
-three versions; the expanded strict-diagnostics and stress suite must be
-checked in GitHub Actions. Other PHP and PSR-3 versions are not certified.
+three versions; the expanded strict-diagnostics and stress suite also passed on all three versions (10,000 commands per version, zero measured PHP memory growth). Other PHP and PSR-3 versions are not certified.
 
 The Composer package name remains `chan-sccp/pami` and the namespace remains
-`PAMI`. No new runtime package dependencies are introduced. The existing
-Composer PHP minimum still needs to be aligned with the implementation before release.
+`PAMI`. No new runtime package dependencies are introduced. Composer requires PHP 7.4 or newer.
 
 ## Installation — development only
 
@@ -152,7 +150,7 @@ The simulated AMI suite covers rejected login, immediate and fragmented
 responses, command output, command errors, interleaved events, idle polling,
 timeouts, late responses and disconnects. The stress scenario sends 10,000
 commands on one connection and checks memory growth after warm-up against a
-1 MiB threshold. Unsuppressed PHP diagnostics fail the suite.
+1 MiB threshold. Unsuppressed PHP diagnostics fail the suite. A Linux-only connection cycle test checks 100 open/send/close cycles, peer EOF and file descriptor growth.
 
 Simulation is not a substitute for real Asterisk integration testing.
 Legacy command framing, TLS and the full upstream action/event catalog still
