@@ -5,6 +5,7 @@ use PAMI\Client\Impl\ClientImpl;
 use PAMI\Client\Exception\ClientException;
 use PAMI\Message\Action\PingAction;
 use PAMI\Message\Action\CommandAction;
+use PAMI\Message\Action\PJSIPShowEndpointsAction;
 
 set_error_handler(function ($level, $message, $file, $line) {
     if (error_reporting() & $level) {
@@ -59,6 +60,10 @@ function scenario($mode) {
                     fwrite($socket, "Response: Success\r\nAction");
                     usleep(50000);
                     fwrite($socket, "ID: $id\r\nMessage: Test\r\n\r\n");
+                } elseif ($mode === 'endpoints') {
+                    fwrite($socket, "Response: Success\r\nActionID: $id\r\nEventList: start\r\nMessage: Endpoints will follow\r\n\r\n");
+                    fwrite($socket, "Event: EndpointList\r\nActionID: $id\r\nObjectName: 100\r\n\r\n");
+                    fwrite($socket, "Event: EndpointListComplete\r\nActionID: $id\r\nEventList: Complete\r\nListItems: 1\r\n\r\n");
                 } elseif ($mode === 'command' || $mode === 'command-error') {
                     fwrite($socket, "Event: FullyBooted\r\nStatus: Fully Booted\r\n\r\n");
                     if ($mode === 'command-error') {
@@ -103,8 +108,12 @@ function scenario($mode) {
                     echo "Stress: 10000 commands, memory growth $growth bytes\n";
                 } else {
                 $command = in_array($mode, ['command','command-error','timeout'], true);
-                $response = $client->send($command ? new CommandAction('core show version') : new PingAction());
+                $response = $client->send($mode === 'endpoints' ? new PJSIPShowEndpointsAction() : ($command ? new CommandAction('core show version') : new PingAction()));
                 check($response->isSuccess() === ($mode !== 'command-error'), 'Unexpected response status');
+                if ($mode === 'endpoints') {
+                    check($response->isComplete() && count($response->getEvents()) === 1, 'Incorrect endpoint list');
+                    check($response->getEvents()[0]->getKey('ObjectName') == '100', 'Incorrect endpoint name');
+                }
                 if ($mode === 'command') {
                     check($response->getCommandOutputArray() === ['first','second'], 'Incorrect command output');
                 }
@@ -130,7 +139,7 @@ function scenario($mode) {
     check(pcntl_wifexited($status) && pcntl_wexitstatus($status) === 0, 'Fake server failed');
     echo "PASS $mode\n";
 }
-foreach (['login-error','success','fragment','command','command-error','timeout','disconnect','stress'] as $mode) {
+foreach (['login-error','success','fragment','command','command-error','timeout','disconnect','stress','endpoints'] as $mode) {
     scenario($mode);
 }
 
