@@ -54,6 +54,8 @@ abstract class Response extends IncomingMessage
      */
     protected $events;
 
+    protected $eventsCount = 0;
+
     /**
      * Is this response completed? (with all its events).
      * @var boolean
@@ -95,9 +97,9 @@ abstract class Response extends IncomingMessage
     public function addEvent(EventMessage $event)
     {
         $this->events[] = $event;
-        if (stristr($event->getEventList(), 'complete') !== false
-            || stristr($event->getName(), 'complete') !== false
-            || stristr($event->getName(), 'DBGetResponse') !== false
+        if (stristr((string) $event->getEventList(), 'complete') !== false
+            || stristr((string) $event->getName(), 'complete') !== false
+            || stristr((string) $event->getName(), 'DBGetResponse') !== false
         ) {
             $this->completed = true;
         }
@@ -120,7 +122,7 @@ abstract class Response extends IncomingMessage
      */
     public function isSuccess()
     {
-        return stristr($this->getKey('Response'), 'Error') === false;
+        return stristr((string) $this->getKey('Response'), 'Error') === false;
     }
 
     /**
@@ -133,8 +135,8 @@ abstract class Response extends IncomingMessage
     public function isList()
     {
         return
-            stristr($this->getKey('EventList'), 'start') !== false
-            || stristr($this->getMessage(), 'follow') !== false
+            stristr((string) $this->getKey('EventList'), 'start') !== false
+            || stristr((string) $this->getMessage(), 'follow') !== false
         ;
     }
 
