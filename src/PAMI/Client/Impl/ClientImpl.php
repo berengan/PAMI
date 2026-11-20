@@ -395,7 +395,7 @@ class ClientImpl implements IClient
     protected function findResponse(IncomingMessage $message)
     {
         $actionId = $message->getActionId();
-        if (isset($this->incomingQueue[$actionId])) {
+        if ($actionId !== null && isset($this->incomingQueue[$actionId])) {
             return $this->incomingQueue[$actionId];
         }
         return false;
