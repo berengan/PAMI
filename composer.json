@@ -14,7 +14,7 @@
         "monitor",
         "chan-sccp"
     ],
-    "homepage": "http://github.com/chan-sccp/PAMI",
+    "homepage": "https://github.com/berengan/PAMI",
     "license": "Apache-2.0",
     "authors": [
         {
@@ -31,9 +31,9 @@
         }
     ],
     "support": {
-        "issues": "https://github.com/chan-sccp/PAMI/issues",
+        "issues": "https://github.com/berengan/PAMI/issues",
         "wiki": "https://github.com/chan-sccp/PAMI/wiki",
-        "source": "https://github.com/chan-sccp/PAMI",
+        "source": "https://github.com/berengan/PAMI",
         "docs": "https://chan-sccp.github.io/PAMI"
     },
     "autoload": {
