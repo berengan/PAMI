@@ -4,6 +4,7 @@ require dirname(__DIR__, 2) . '/vendor/autoload.php';
 use PAMI\Client\Impl\ClientImpl;
 use PAMI\Client\Exception\ClientException;
 use PAMI\Message\Action\PingAction;
+use PAMI\Message\Action\CommandAction;
 
 function check($condition, $message) {
     if (!$condition) {
@@ -47,6 +48,13 @@ function scenario($mode) {
                     fwrite($socket, "Response: Success\r\nAction");
                     usleep(50000);
                     fwrite($socket, "ID: $id\r\nMessage: Test\r\n\r\n");
+                } elseif ($mode === 'command' || $mode === 'command-error') {
+                    fwrite($socket, "Event: FullyBooted\r\nStatus: Fully Booted\r\n\r\n");
+                    if ($mode === 'command-error') {
+                        reply($socket, $id, 'Error');
+                    } else {
+                        fwrite($socket, "Response: Success\r\nActionID: $id\r\nOutput: first\r\nOutput: second\r\n\r\n");
+                    }
                 } else {
                     reply($socket, $id);
                 }
@@ -61,6 +69,8 @@ function scenario($mode) {
     }
     fclose($server);
     $client = new ClientImpl(['host'=>'127.0.0.1','port'=>$port,'username'=>'test','secret'=>'test','connect_timeout'=>1000,'read_timeout'=>300]);
+    $events = 0;
+    $client->registerEventListener(function ($event) use (&$events) { $events++; });
     try {
         $failed = false;
         try {
@@ -71,8 +81,15 @@ function scenario($mode) {
             check((hrtime(true)-$start)/1e6 < 100, 'Idle process blocked');
             $start = hrtime(true);
             try {
-                $response = $client->send(new PingAction());
-                check($response->isSuccess(), 'Response failed');
+                $command = in_array($mode, ['command','command-error','timeout'], true);
+                $response = $client->send($command ? new CommandAction('core show version') : new PingAction());
+                check($response->isSuccess() === ($mode !== 'command-error'), 'Unexpected response status');
+                if ($mode === 'command') {
+                    check($response->getCommandOutputArray() === ['first','second'], 'Incorrect command output');
+                }
+                if ($mode === 'command' || $mode === 'command-error') {
+                    check($events === 1, 'Event not dispatched during send');
+                }
             } finally {
                 $elapsed = (hrtime(true)-$start)/1e6;
             }
@@ -91,6 +108,6 @@ function scenario($mode) {
     check(pcntl_wifexited($status) && pcntl_wexitstatus($status) === 0, 'Fake server failed');
     echo "PASS $mode\n";
 }
-foreach (['login-error','success','fragment','timeout','disconnect'] as $mode) {
+foreach (['login-error','success','fragment','command','command-error','timeout','disconnect'] as $mode) {
     scenario($mode);
 }
