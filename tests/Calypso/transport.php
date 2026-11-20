@@ -6,6 +6,12 @@ use PAMI\Client\Exception\ClientException;
 use PAMI\Message\Action\PingAction;
 use PAMI\Message\Action\CommandAction;
 
+set_error_handler(function ($level, $message, $file, $line) {
+    if (error_reporting() & $level) {
+        throw new ErrorException($message, 0, $level, $file, $line);
+    }
+    return false;
+});
 function check($condition, $message) {
     if (!$condition) {
         throw new RuntimeException($message);
@@ -39,7 +45,12 @@ function scenario($mode) {
             reply($socket, $id, $mode === 'login-error' ? 'Error' : 'Success');
             if ($mode !== 'login-error') {
                 $id = request($socket);
-                if ($mode === 'timeout') {
+                if ($mode === 'stress') {
+                    for ($i = 0; $i < 10000; $i++) {
+                        if ($i > 0) $id = request($socket);
+                        reply($socket, $id);
+                    }
+                } elseif ($mode === 'timeout') {
                     usleep(700000);
                     @fwrite($socket, "Response: Success\r\nMessage: Late\r\n\r\n");
                 } elseif ($mode === 'disconnect') {
@@ -81,6 +92,16 @@ function scenario($mode) {
             check((hrtime(true)-$start)/1e6 < 100, 'Idle process blocked');
             $start = hrtime(true);
             try {
+                if ($mode === 'stress') {
+                    $baseline = memory_get_usage();
+                    for ($i = 0; $i < 10000; $i++) {
+                        check($client->send(new PingAction())->isSuccess(), 'Stress response failed');
+                        if ($i === 99) $baseline = memory_get_usage();
+                    }
+                    $growth = memory_get_usage() - $baseline;
+                    check($growth < 1048576, 'Memory growth exceeds 1 MiB');
+                    echo "Stress: 10000 commands, memory growth $growth bytes\n";
+                } else {
                 $command = in_array($mode, ['command','command-error','timeout'], true);
                 $response = $client->send($command ? new CommandAction('core show version') : new PingAction());
                 check($response->isSuccess() === ($mode !== 'command-error'), 'Unexpected response status');
@@ -89,6 +110,7 @@ function scenario($mode) {
                 }
                 if ($mode === 'command' || $mode === 'command-error') {
                     check($events === 1, 'Event not dispatched during send');
+                }
                 }
             } finally {
                 $elapsed = (hrtime(true)-$start)/1e6;
@@ -108,6 +130,6 @@ function scenario($mode) {
     check(pcntl_wifexited($status) && pcntl_wexitstatus($status) === 0, 'Fake server failed');
     echo "PASS $mode\n";
 }
-foreach (['login-error','success','fragment','command','command-error','timeout','disconnect'] as $mode) {
+foreach (['login-error','success','fragment','command','command-error','timeout','disconnect','stress'] as $mode) {
     scenario($mode);
 }
